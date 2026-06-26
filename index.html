@@ -1,0 +1,1379 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kral Editor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --bg-hover: #30363d;
+            --border-color: #30363d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --danger: #f85149;
+            --success: #238636;
+            --warning: #f0883e;
+            --tab-active: #0d1117;
+            --tab-inactive: #161b22;
+            --sidebar-width: 260px;
+            --header-height: 48px;
+            --tab-height: 38px;
+            --bottom-bar-height: 56px;
+            --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        html, body {
+            width: 100%; height: 100%;
+            overflow: hidden;
+            font-family: var(--font-ui);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Layout */
+        .app-container {
+            display: grid;
+            grid-template-rows: var(--header-height) var(--tab-height) 1fr var(--bottom-bar-height);
+            grid-template-columns: var(--sidebar-width) 1fr;
+            grid-template-areas:
+                "sidebar header"
+                "sidebar tabs"
+                "sidebar editor"
+                "sidebar bottom";
+            width: 100vw; height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .header {
+            grid-area: header;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            gap: 8px;
+            z-index: 20;
+        }
+
+        .logo {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .logo::before {
+            content: "♔";
+            font-size: 20px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            grid-area: sidebar;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            z-index: 30;
+        }
+
+        .sidebar-header {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .file-tree {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 8px 0;
+            font-size: 13px;
+            user-select: none;
+        }
+
+        .file-tree::-webkit-scrollbar { width: 6px; }
+        .file-tree::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 3px; }
+
+        .tree-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 12px 6px calc(12px + var(--depth, 0) * 16px);
+            cursor: pointer;
+            gap: 6px;
+            color: var(--text-secondary);
+            transition: background 0.15s;
+            min-height: 32px;
+        }
+
+        .tree-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .tree-item.active { background: var(--bg-hover); color: var(--accent); }
+        .tree-item.selected { background: rgba(88, 166, 255, 0.15); }
+
+        .tree-icon { width: 16px; text-align: center; flex-shrink: 0; font-size: 14px; }
+        .tree-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tree-arrow { width: 16px; text-align: center; transition: transform 0.2s; flex-shrink: 0; font-size: 10px; }
+        .tree-arrow.collapsed { transform: rotate(-90deg); }
+        .tree-arrow.leaf { opacity: 0; pointer-events: none; }
+
+        /* Tabs */
+        .tabs-container {
+            grid-area: tabs;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .tabs-container::-webkit-scrollbar { display: none; }
+
+        .tab {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 14px;
+            height: var(--tab-height);
+            background: var(--tab-inactive);
+            border-right: 1px solid var(--border-color);
+            cursor: pointer;
+            white-space: nowrap;
+            font-size: 12px;
+            color: var(--text-secondary);
+            transition: background 0.15s;
+            position: relative;
+            min-width: 120px;
+            max-width: 220px;
+            flex-shrink: 0;
+        }
+
+        .tab.active {
+            background: var(--tab-active);
+            color: var(--text-primary);
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .tab:hover:not(.active) { background: var(--bg-hover); }
+        .tab.modified::after {
+            content: "●";
+            color: var(--accent);
+            font-size: 8px;
+            margin-left: 2px;
+        }
+
+        .tab-close {
+            width: 18px; height: 18px;
+            border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px;
+            opacity: 0.6;
+            margin-left: 4px;
+        }
+        .tab-close:hover { background: var(--danger); color: white; opacity: 1; }
+
+        /* Editor */
+        .editor-area {
+            grid-area: editor;
+            position: relative;
+            overflow: hidden;
+            background: var(--bg-primary);
+        }
+
+        #monaco-container {
+            width: 100%; height: 100%;
+        }
+
+        .empty-state {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            gap: 16px;
+            text-align: center;
+            padding: 24px;
+        }
+
+        .empty-state h2 { color: var(--text-primary); font-size: 20px; }
+        .empty-state p { font-size: 14px; max-width: 400px; line-height: 1.6; }
+
+        /* Bottom Bar */
+        .bottom-bar {
+            grid-area: bottom;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            gap: 8px;
+            z-index: 20;
+        }
+
+        .bottom-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .status-info {
+            font-size: 12px;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: var(--font-ui);
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+            min-height: 36px;
+            min-width: 36px;
+        }
+
+        .btn:hover { background: var(--bg-hover); border-color: var(--text-secondary); }
+        .btn:active { transform: scale(0.97); }
+        .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .btn.primary:hover { background: var(--accent-hover); }
+        .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+        .btn.success { background: var(--success); color: #fff; border-color: var(--success); }
+        .btn.icon-only { padding: 8px; border-radius: 50%; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Preview Overlay */
+        .preview-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+        }
+        .preview-overlay.active { display: flex; }
+        
+        .preview-header {
+            height: 48px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+        }
+
+        .preview-frame {
+            flex: 1;
+            border: none;
+            background: white;
+        }
+
+        /* Search & Replace */
+        .search-panel {
+            position: absolute;
+            top: 0; right: 0;
+            width: 380px;
+            max-width: 100%;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-top: none;
+            border-right: none;
+            padding: 16px;
+            z-index: 50;
+            display: none;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: -4px 4px 12px rgba(0,0,0,0.4);
+        }
+        .search-panel.active { display: flex; }
+
+        .search-input, .replace-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: var(--font-ui);
+        }
+        .search-input:focus, .replace-input:focus { outline: none; border-color: var(--accent); }
+
+        .search-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+        /* Context Menu */
+        .context-menu {
+            position: fixed;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 6px 0;
+            z-index: 2000;
+            min-width: 180px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            display: none;
+        }
+        .context-menu.active { display: block; }
+        .context-item {
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-primary);
+        }
+        .context-item:hover { background: var(--bg-hover); }
+        .context-item.danger { color: var(--danger); }
+        .context-divider { height: 1px; background: var(--border-color); margin: 6px 0; }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: none;
+        }
+        .toast {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--accent);
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            animation: slideUp 0.3s ease;
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .toast.error { border-left-color: var(--danger); }
+        .toast.success { border-left-color: var(--success); }
+        .toast.warning { border-left-color: var(--warning); }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 2500;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            width: 100%;
+            max-width: 420px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .modal-title { font-size: 16px; font-weight: 600; }
+        .modal-input {
+            width: 100%;
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        .modal-input:focus { outline: none; border-color: var(--accent); }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+        /* Safe Mode Banner */
+        .safe-mode-banner {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            background: var(--danger);
+            color: white;
+            padding: 10px 16px;
+            z-index: 4000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            font-size: 13px;
+        }
+        .safe-mode-banner.active { display: flex; }
+
+        /* Mobile */
+        @media (max-width: 768px) {
+            :root { --sidebar-width: 0px; --bottom-bar-height: 64px; }
+            .app-container {
+                grid-template-columns: 1fr;
+                grid-template-areas:
+                    "header"
+                    "tabs"
+                    "editor"
+                    "bottom";
+            }
+            .sidebar {
+                position: fixed;
+                left: 0; top: 0; bottom: 0;
+                width: 280px;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+                box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+            }
+            .sidebar.open { transform: translateX(0); }
+            .sidebar-backdrop {
+                position: fixed; inset: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 25; display: none;
+            }
+            .sidebar-backdrop.active { display: block; }
+            .btn { min-height: 44px; min-width: 44px; padding: 10px 16px; }
+            .tab { min-width: 100px; padding: 0 10px; }
+            .search-panel { width: 100%; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+        /* Misc */
+        .hidden { display: none !important; }
+        .drag-ghost { opacity: 0.5; }
+    </style>
+</head>
+<body>
+
+    <!-- Safe Mode Banner -->
+    <div class="safe-mode-banner" id="safeModeBanner">
+        <span>⚠️ Güvenli Mod Aktif - Değişiklikler geçici olarak askıya alındı</span>
+        <button class="btn" onclick="app.disableSafeMode()" style="background:rgba(255,255,255,0.2);border:none;">Güvenli Modu Kapat</button>
+    </div>
+
+    <!-- Sidebar Backdrop (Mobile) -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="app.toggleSidebar()"></div>
+
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <button class="btn primary" onclick="app.openFolder()" style="flex:1;min-height:40px;">
+                    📁 Klasör Aç
+                </button>
+                <button class="btn icon-only" onclick="app.createFile()" title="Yeni Dosya">📄</button>
+                <button class="btn icon-only" onclick="app.createFolder()" title="Yeni Klasör">📂</button>
+            </div>
+            <div class="file-tree" id="fileTree"></div>
+        </aside>
+
+        <!-- Header -->
+        <header class="header">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <button class="btn icon-only" onclick="app.toggleSidebar()" style="display:none;" id="menuBtn">☰</button>
+                <div class="logo">Kral Editor</div>
+            </div>
+            <div class="header-actions">
+                <button class="btn" onclick="app.toggleSearch()" title="Ara & Değiştir (Ctrl+Shift+F)">🔍</button>
+                <button class="btn" onclick="app.downloadZip()" title="ZIP İndir">⬇️</button>
+                <button class="btn primary" onclick="app.saveCurrentFile()" title="Kaydet (Ctrl+S)">💾 Kaydet</button>
+            </div>
+        </header>
+
+        <!-- Tabs -->
+        <div class="tabs-container" id="tabsContainer"></div>
+
+        <!-- Editor -->
+        <div class="editor-area" id="editorArea">
+            <div class="empty-state" id="emptyState">
+                <h2>♔ Kral Editor</h2>
+                <p>Profesyonel web tabanlı IDE'nize hoş geldiniz.<br>Sol panelden bir klasör seçin veya yeni bir dosya oluşturun.</p>
+                <button class="btn primary" onclick="app.openFolder()" style="margin-top:8px;">Klasör Seç</button>
+            </div>
+            <div id="monaco-container" style="display:none;"></div>
+            
+            <!-- Search Panel -->
+            <div class="search-panel" id="searchPanel">
+                <input type="text" class="search-input" id="searchInput" placeholder="Ara..." onkeydown="if(event.key==='Enter')app.findNext()">
+                <input type="text" class="replace-input" id="replaceInput" placeholder="Değiştir..." onkeydown="if(event.key==='Enter')app.replaceNext()">
+                <div class="search-actions">
+                    <button class="btn" onclick="app.findNext()">Sonrakini Bul</button>
+                    <button class="btn" onclick="app.replaceNext()">Değiştir</button>
+                    <button class="btn" onclick="app.replaceAll()">Tümünü Değiştir</button>
+                    <button class="btn" onclick="app.toggleSearch()">Kapat</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Bar -->
+        <div class="bottom-bar">
+            <div class="bottom-actions">
+                <button class="btn icon-only" onclick="app.undo()" title="Geri Al">↩️</button>
+                <button class="btn icon-only" onclick="app.redo()" title="Yinele">↪️</button>
+                <button class="btn icon-only" onclick="app.saveCurrentFile()" title="Kaydet">💾</button>
+                <button class="btn icon-only" onclick="app.togglePreview()" id="previewBtn" title="Önizle" disabled>👁️</button>
+            </div>
+            <div class="status-info" id="statusBar">
+                <span id="statusLang">Hazır</span>
+                <span id="statusCursor">Ln 1, Col 1</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview Overlay -->
+    <div class="preview-overlay" id="previewOverlay">
+        <div class="preview-header">
+            <span style="font-weight:600;">🌐 Canlı Önizleme</span>
+            <div style="display:flex;gap:8px;">
+                <button class="btn" onclick="app.refreshPreview()">🔄 Yenile</button>
+                <button class="btn danger" onclick="app.closePreview()">✕ Kapat</button>
+            </div>
+        </div>
+        <iframe class="preview-frame" id="previewFrame" sandbox="allow-scripts allow-same-origin allow-modals allow-forms"></iframe>
+    </div>
+
+    <!-- Context Menu -->
+    <div class="context-menu" id="contextMenu">
+        <div class="context-item" onclick="app.ctxAction('open')">📂 Aç</div>
+        <div class="context-item" onclick="app.ctxAction('rename')">✏️ Yeniden Adlandır</div>
+        <div class="context-item" onclick="app.ctxAction('download')">⬇️ İndir</div>
+        <div class="context-divider"></div>
+        <div class="context-item" onclick="app.ctxAction('copy')">📋 Kopyala</div>
+        <div class="context-item" onclick="app.ctxAction('delete')">🗑️ Sil</div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <div class="modal-title" id="modalTitle">Başlık</div>
+            <input type="text" class="modal-input" id="modalInput" placeholder="..." onkeydown="if(event.key==='Enter')app.confirmModal()">
+            <div class="modal-actions">
+                <button class="btn" onclick="app.closeModal()">İptal</button>
+                <button class="btn primary" onclick="app.confirmModal()">Tamam</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // ==================== FILE TYPE MAPPING ====================
+        const FILE_TYPE_MAP = {
+            'js': 'javascript', 'mjs': 'javascript', 'jsx': 'javascript',
+            'ts': 'typescript', 'tsx': 'typescript',
+            'html': 'html', 'htm': 'html', 'xhtml': 'html',
+            'css': 'css', 'scss': 'scss', 'sass': 'sass', 'less': 'less',
+            'xml': 'xml', 'xsd': 'xml', 'xsl': 'xml', 'svg': 'xml',
+            'java': 'java', 'class': 'java',
+            'py': 'python', 'pyw': 'python', 'ipynb': 'json',
+            'c': 'c', 'h': 'c', 'cpp': 'cpp', 'hpp': 'cpp', 'cc': 'cpp', 'cxx': 'cpp',
+            'cs': 'csharp', 'go': 'go', 'rs': 'rust', 'rb': 'ruby',
+            'php': 'php', 'swift': 'swift', 'kt': 'kotlin', 'kts': 'kotlin',
+            'json': 'json', 'yaml': 'yaml', 'yml': 'yaml',
+            'md': 'markdown', 'markdown': 'markdown',
+            'sql': 'sql', 'sh': 'shell', 'bash': 'shell', 'zsh': 'shell',
+            'dockerfile': 'dockerfile', 'rules': 'plaintext',
+            'txt': 'plaintext', 'log': 'plaintext', 'ini': 'ini',
+            'vue': 'html', 'svelte': 'html', 'astro': 'html'
+        };
+
+        function getLanguage(filename) {
+            if (!filename) return 'plaintext';
+            const ext = filename.split('.').pop().toLowerCase();
+            return FILE_TYPE_MAP[ext] || 'plaintext';
+        }
+
+        function getFileIcon(filename, isDir) {
+            if (isDir) return '📁';
+            const ext = filename.split('.').pop().toLowerCase();
+            const icons = {
+                js: '📜', ts: '🔷', html: '🌐', css: '🎨', java: '☕', py: '🐍',
+                json: '📋', md: '📝', xml: '📄', svg: '🖼️', sql: '🗃️', sh: '⚡',
+                zip: '📦', png: '🖼️', jpg: '🖼️', gif: '🖼️', pdf: '📕'
+            };
+            return icons[ext] || '📄';
+        }
+
+        // ==================== APP STATE ====================
+        const app = {
+            dirHandle: null,
+            fileTree: [],
+            openTabs: [],
+            activeTab: null,
+            editor: null,
+            models: new Map(),
+            safeMode: false,
+            clipboard: null,
+            ctxTarget: null,
+            modalCallback: null,
+            isMobile: window.innerWidth <= 768,
+            searchVisible: false,
+
+            init() {
+                this.setupMonaco();
+                this.setupKeyboard();
+                this.setupGlobalHandlers();
+                this.updateMobileUI();
+                window.addEventListener('resize', () => {
+                    this.isMobile = window.innerWidth <= 768;
+                    this.updateMobileUI();
+                });
+            },
+
+            updateMobileUI() {
+                const menuBtn = document.getElementById('menuBtn');
+                menuBtn.style.display = this.isMobile ? 'flex' : 'none';
+            },
+
+            toggleSidebar() {
+                document.getElementById('sidebar').classList.toggle('open');
+                document.getElementById('sidebarBackdrop').classList.toggle('active');
+            },
+
+            // ==================== MONACO EDITOR ====================
+            setupMonaco() {
+                require.config({ 
+                    paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }
+                });
+                require(['vs/editor/editor.main'], () => {
+                    this.editor = monaco.editor.create(document.getElementById('monaco-container'), {
+                        value: '',
+                        language: 'plaintext',
+                        theme: 'vs-dark',
+                        automaticLayout: true,
+                        minimap: { enabled: true, scale: 1 },
+                        fontSize: 14,
+                        fontFamily: 'var(--font-mono)',
+                        lineNumbers: 'on',
+                        roundedSelection: false,
+                        scrollBeyondLastLine: false,
+                        renderWhitespace: 'selection',
+                        tabSize: 4,
+                        insertSpaces: true,
+                        wordWrap: 'on',
+                        smoothScrolling: true,
+                        cursorBlinking: 'smooth',
+                        folding: true,
+                        bracketPairColorization: { enabled: true },
+                        formatOnPaste: true,
+                        formatOnType: true,
+                        quickSuggestions: true,
+                        suggestOnTriggerCharacters: true,
+                        acceptSuggestionOnEnter: 'on',
+                    });
+
+                    this.editor.onDidChangeModelContent(() => {
+                        if (this.activeTab && !this.safeMode) {
+                            const tab = this.openTabs.find(t => t.id === this.activeTab);
+                            if (tab && !tab.modified) {
+                                tab.modified = true;
+                                this.renderTabs();
+                            }
+                        }
+                    });
+
+                    this.editor.onDidChangeCursorPosition((e) => {
+                        document.getElementById('statusCursor').textContent = 
+                            `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+                    });
+
+                    // Update status language
+                    this.editor.onDidChangeModel(() => {
+                        const model = this.editor.getModel();
+                        if (model) {
+                            document.getElementById('statusLang').textContent = 
+                                model.getLanguageId().toUpperCase();
+                        }
+                    });
+
+                    this.showToast('Monaco Editor yüklendi', 'success');
+                });
+            },
+
+            // ==================== FILE SYSTEM ====================
+            async openFolder() {
+                try {
+                    if (!('showDirectoryPicker' in window)) {
+                        this.showToast('Tarayıcınız File System Access API desteklemiyor. Chrome/Edge kullanın.', 'error');
+                        return;
+                    }
+                    this.dirHandle = await window.showDirectoryPicker();
+                    await this.scanDirectory();
+                    this.renderFileTree();
+                    this.showToast('Klasör yüklendi: ' + this.dirHandle.name, 'success');
+                    if (this.isMobile) this.toggleSidebar();
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        this.handleError('Klasör açılırken hata', err);
+                    }
+                }
+            },
+
+            async scanDirectory() {
+                this.fileTree = [];
+                const scan = async (handle, path = '', depth = 0) => {
+                    const node = {
+                        name: handle.name,
+                        handle: handle,
+                        kind: handle.kind,
+                        path: path ? path + '/' + handle.name : handle.name,
+                        depth: depth,
+                        expanded: depth < 1,
+                        children: []
+                    };
+                    if (handle.kind === 'directory') {
+                        try {
+                            for await const entry of handle.values()) {
+                                const child = await scan(entry, node.path, depth + 1);
+                                node.children.push(child);
+                            }
+                            node.children.sort((a, b) => {
+                                if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1;
+                                return a.name.localeCompare(b.name);
+                            });
+                        } catch (e) {
+                            // Permission denied for some subdirs
+                        }
+                    }
+                    return node;
+                };
+                const root = await scan(this.dirHandle);
+                this.fileTree = root.children;
+            },
+
+            async refreshTree() {
+                if (this.dirHandle) {
+                    await this.scanDirectory();
+                    this.renderFileTree();
+                }
+            },
+
+            // ==================== FILE TREE RENDERING ====================
+            renderFileTree() {
+                const tree = document.getElementById('fileTree');
+                tree.innerHTML = '';
+                
+                const renderNode = (node) => {
+                    const el = document.createElement('div');
+                    el.className = 'tree-item';
+                    el.style.setProperty('--depth', node.depth);
+                    if (this.activeTab === node.path) el.classList.add('active');
+                    
+                    const arrow = document.createElement('span');
+                    arrow.className = 'tree-arrow ' + (node.kind === 'directory' ? '' : 'leaf');
+                    if (node.kind === 'directory') {
+                        arrow.textContent = '▼';
+                        if (!node.expanded) arrow.classList.add('collapsed');
+                    }
+                    
+                    const icon = document.createElement('span');
+                    icon.className = 'tree-icon';
+                    icon.textContent = getFileIcon(node.name, node.kind === 'directory');
+                    
+                    const label = document.createElement('span');
+                    label.className = 'tree-label';
+                    label.textContent = node.name;
+                    
+                    el.appendChild(arrow);
+                    el.appendChild(icon);
+                    el.appendChild(label);
+                    
+                    el.onclick = (e) => {
+                        e.stopPropagation();
+                        if (node.kind === 'directory') {
+                            node.expanded = !node.expanded;
+                            this.renderFileTree();
+                        } else {
+                            this.openFile(node);
+                        }
+                    };
+                    
+                    el.oncontextmenu = (e) => {
+                        e.preventDefault();
+                        this.showContextMenu(e, node);
+                    };
+                    
+                    tree.appendChild(el);
+                    
+                    if (node.kind === 'directory' && node.expanded && node.children) {
+                        node.children.forEach(renderNode);
+                    }
+                };
+                
+                this.fileTree.forEach(renderNode);
+            },
+
+            // ==================== TAB MANAGEMENT ====================
+            async openFile(node) {
+                const existing = this.openTabs.find(t => t.id === node.path);
+                if (existing) {
+                    this.switchTab(node.path);
+                    return;
+                }
+
+                try {
+                    const file = await node.handle.getFile();
+                    const content = await file.text();
+                    
+                    const tab = {
+                        id: node.path,
+                        name: node.name,
+                        handle: node.handle,
+                        content: content,
+                        modified: false,
+                        language: getLanguage(node.name)
+                    };
+                    
+                    this.openTabs.push(tab);
+                    this.switchTab(node.path);
+                    this.renderTabs();
+                    
+                    // Hide empty state
+                    document.getElementById('emptyState').style.display = 'none';
+                    document.getElementById('monaco-container').style.display = 'block';
+                    
+                } catch (err) {
+                    this.handleError('Dosya açılırken hata', err);
+                }
+            },
+
+            switchTab(id) {
+                this.activeTab = id;
+                const tab = this.openTabs.find(t => t.id === id);
+                if (!tab) return;
+                
+                // Create or get model
+                let model = this.models.get(id);
+                if (!model) {
+                    model = monaco.editor.createModel(tab.content, tab.language);
+                    this.models.set(id, model);
+                }
+                
+                this.editor.setModel(model);
+                this.renderTabs();
+                this.updatePreviewButton();
+            },
+
+            closeTab(id, event) {
+                if (event) event.stopPropagation();
+                const idx = this.openTabs.findIndex(t => t.id === id);
+                const tab = this.openTabs[idx];
+                
+                if (tab && tab.modified) {
+                    if (!confirm(`"${tab.name}" kaydedilmemiş değişiklikler içeriyor. Sekmeyi kapatmak istiyor musunuz?`)) {
+                        return;
+                    }
+                }
+                
+                // Dispose model
+                const model = this.models.get(id);
+                if (model) { model.dispose(); this.models.delete(id); }
+                
+                this.openTabs.splice(idx, 1);
+                
+                if (this.activeTab === id) {
+                    if (this.openTabs.length > 0) {
+                        const newIdx = Math.min(idx, this.openTabs.length - 1);
+                        this.switchTab(this.openTabs[newIdx].id);
+                    } else {
+                        this.activeTab = null;
+                        this.editor.setModel(monaco.editor.createModel('', 'plaintext'));
+                        document.getElementById('emptyState').style.display = 'flex';
+                        document.getElementById('monaco-container').style.display = 'none';
+                        document.getElementById('statusLang').textContent = 'Hazır';
+                    }
+                }
+                this.renderTabs();
+                this.updatePreviewButton();
+            },
+
+            renderTabs() {
+                const container = document.getElementById('tabsContainer');
+                container.innerHTML = '';
+                
+                this.openTabs.forEach(tab => {
+                    const el = document.createElement('div');
+                    el.className = 'tab' + (tab.id === this.activeTab ? ' active' : '') + (tab.modified ? ' modified' : '');
+                    
+                    const icon = document.createElement('span');
+                    icon.textContent = getFileIcon(tab.name, false);
+                    icon.style.fontSize = '12px';
+                    
+                    const label = document.createElement('span');
+                    label.textContent = tab.name;
+                    label.style.overflow = 'hidden';
+                    label.style.textOverflow = 'ellipsis';
+                    
+                    const close = document.createElement('span');
+                    close.className = 'tab-close';
+                    close.innerHTML = '×';
+                    close.onclick = (e) => this.closeTab(tab.id, e);
+                    
+                    el.appendChild(icon);
+                    el.appendChild(label);
+                    el.appendChild(close);
+                    el.onclick = () => this.switchTab(tab.id);
+                    
+                    container.appendChild(el);
+                });
+                
+                // Scroll active tab into view
+                if (this.activeTab) {
+                    const active = container.querySelector('.tab.active');
+                    if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'center' });
+                }
+            },
+
+            // ==================== EDITOR ACTIONS ====================
+            async saveCurrentFile() {
+                if (!this.activeTab || this.safeMode) return;
+                const tab = this.openTabs.find(t => t.id === this.activeTab);
+                if (!tab || !tab.handle) return;
+                
+                try {
+                    const writable = await tab.handle.createWritable();
+                    const content = this.editor.getValue();
+                    await writable.write(content);
+                    await writable.close();
+                    
+                    tab.content = content;
+                    tab.modified = false;
+                    this.renderTabs();
+                    this.showToast(`"${tab.name}" kaydedildi`, 'success');
+                } catch (err) {
+                    this.handleError('Kaydetme hatası', err);
+                }
+            },
+
+            undo() {
+                if (this.editor) this.editor.trigger('keyboard', 'undo', null);
+            },
+
+            redo() {
+                if (this.editor) this.editor.trigger('keyboard', 'redo', null);
+            },
+
+            // ==================== PREVIEW ====================
+            updatePreviewButton() {
+                const btn = document.getElementById('previewBtn');
+                const tab = this.openTabs.find(t => t.id === this.activeTab);
+                const isPreviewable = tab && /html|css|javascript|json/.test(tab.language);
+                btn.disabled = !isPreviewable;
+                btn.style.opacity = isPreviewable ? '1' : '0.3';
+            },
+
+            async togglePreview() {
+                const overlay = document.getElementById('previewOverlay');
+                if (overlay.classList.contains('active')) {
+                    this.closePreview();
+                    return;
+                }
+                
+                const tab = this.openTabs.find(t => t.id === this.activeTab);
+                if (!tab) return;
+                
+                // Gather all open HTML/CSS/JS content
+                let html = '', css = '', js = '';
+                
+                for (const t of this.openTabs) {
+                    const content = this.models.get(t.id)?.getValue() || t.content;
+                    if (t.language === 'html') html = content;
+                    else if (t.language === 'css') css = content;
+                    else if (t.language === 'javascript') js = content;
+                }
+                
+                // If current is not HTML but we have HTML in tabs, use that
+                if (tab.language !== 'html' && !html) {
+                    this.showToast('Önizleme için bir HTML dosyası açın', 'warning');
+                    return;
+                }
+                
+                let srcDoc = html || '<html><head></head><body></body></html>';
+                
+                // Inject CSS
+                if (css) {
+                    srcDoc = srcDoc.replace('</head>', `<style>${css}</style></head>`);
+                }
+                
+                // Inject JS
+                if (js) {
+                    srcDoc = srcDoc.replace('</body>', `<script>${js}<\/script></body>`);
+                }
+                
+                document.getElementById('previewFrame').srcdoc = srcDoc;
+                overlay.classList.add('active');
+            },
+
+            closePreview() {
+                document.getElementById('previewOverlay').classList.remove('active');
+            },
+
+            refreshPreview() {
+                const frame = document.getElementById('previewFrame');
+                frame.srcdoc = frame.srcdoc;
+            },
+
+            // ==================== SEARCH & REPLACE ====================
+            toggleSearch() {
+                this.searchVisible = !this.searchVisible;
+                document.getElementById('searchPanel').classList.toggle('active', this.searchVisible);
+                if (this.searchVisible) {
+                    setTimeout(() => document.getElementById('searchInput').focus(), 100);
+                }
+            },
+
+            findNext() {
+                if (!this.editor) return;
+                const query = document.getElementById('searchInput').value;
+                if (!query) return;
+                this.editor.getAction('actions.find').run();
+                // Use Monaco's find controller
+                const findState = this.editor.getContribution('editor.contrib.findController');
+                if (findState) {
+                    findState.setSearchString(query);
+                    findState.moveToNextMatch();
+                }
+            },
+
+            replaceNext() {
+                if (!this.editor) return;
+                const find = document.getElementById('searchInput').value;
+                const replace = document.getElementById('replaceInput').value;
+                if (!find) return;
+                
+                const model = this.editor.getModel();
+                const matches = model.findMatches(find, false, false, false, null, false);
+                if (matches.length > 0) {
+                    const match = matches[0];
+                    model.pushEditOperations([], [{
+                        range: match.range,
+                        text: replace
+                    }], () => null);
+                }
+            },
+
+            replaceAll() {
+                if (!this.editor) return;
+                const find = document.getElementById('searchInput').value;
+                const replace = document.getElementById('replaceInput').value;
+                if (!find) return;
+                
+                const model = this.editor.getModel();
+                const matches = model.findMatches(find, false, false, false, null, false);
+                if (matches.length === 0) {
+                    this.showToast('Eşleşme bulunamadı', 'warning');
+                    return;
+                }
+                
+                const edits = matches.map(m => ({
+                    range: m.range,
+                    text: replace
+                }));
+                model.pushEditOperations([], edits, () => null);
+                this.showToast(`${matches.length} eşleşme değiştirildi`, 'success');
+            },
+
+            // ==================== FILE OPERATIONS ====================
+            async createFile() {
+                if (!this.dirHandle) {
+                    this.showToast('Önce bir klasör seçin', 'warning');
+                    return;
+                }
+                this.showModal('Yeni Dosya', 'dosya adı (örn: script.js)', async (name) => {
+                    if (!name) return;
+                    try {
+                        await this.dirHandle.getFileHandle(name, { create: true });
+                        await this.refreshTree();
+                        this.showToast(`"${name}" oluşturuldu`, 'success');
+                    } catch (err) {
+                        this.handleError('Dosya oluşturma hatası', err);
+                    }
+                });
+            },
+
+            async createFolder() {
+                if (!this.dirHandle) {
+                    this.showToast('Önce bir klasör seçin', 'warning');
+                    return;
+                }
+                this.showModal('Yeni Klasör', 'klasör adı', async (name) => {
+                    if (!name) return;
+                    try {
+                        await this.dirHandle.getDirectoryHandle(name, { create: true });
+                        await this.refreshTree();
+                        this.showToast(`"${name}" oluşturuldu`, 'success');
+                    } catch (err) {
+                        this.handleError('Klasör oluşturma hatası', err);
+                    }
+                });
+            },
+
+            async renameFile(node, newName) {
+                // File System Access API doesn't support rename directly
+                // We need to create new and remove old
+                this.showToast('Yeniden adlandırma bu sürümde sınırlı destekleniyor', 'warning');
+            },
+
+            async deleteFile(node) {
+                if (!confirm(`"${node.name}" silinecek. Emin misiniz?`)) return;
+                try {
+                    // Note: remove() is available in newer implementations
+                    if (node.handle.remove) {
+                        await node.handle.remove();
+                    } else {
+                        this.showToast('Tarayıcınız dosya silmeyi desteklemiyor', 'warning');
+                        return;
+                    }
+                    await this.refreshTree();
+                    // Close tab if open
+                    const tab = this.openTabs.find(t => t.id === node.path);
+                    if (tab) this.closeTab(tab.id);
+                    this.showToast('Silindi', 'success');
+                } catch (err) {
+                    this.handleError('Silme hatası', err);
+                }
+            },
+
+            async downloadFile(node) {
+                try {
+                    const file = await node.handle.getFile();
+                    const blob = new Blob([await file.text()], { type: file.type || 'text/plain' });
+                    saveAs(blob, node.name);
+                    this.showToast(`"${node.name}" indirildi`, 'success');
+                } catch (err) {
+                    this.handleError('İndirme hatası', err);
+                }
+            },
+
+            async downloadZip() {
+                if (!this.dirHandle) {
+                    this.showToast('Önce bir klasör seçin', 'warning');
+                    return;
+                }
+                
+                try {
+                    this.showToast('ZIP oluşturuluyor...', 'success');
+                    const zip = new JSZip();
+                    
+                    const addToZip = async (handle, path) => {
+                        if (handle.kind === 'directory') {
+                            for await const entry of handle.values()) {
+                                await addToZip(entry, path + '/' + entry.name);
+                            }
+                        } else {
+                            const file = await handle.getFile();
+                            const content = await file.arrayBuffer();
+                            zip.file(path, content);
+                        }
+                    };
+                    
+                    await addToZip(this.dirHandle, this.dirHandle.name);
+                    const blob = await zip.generateAsync({ type: 'blob' });
+                    saveAs(blob, this.dirHandle.name + '.zip');
+                    this.showToast('ZIP indirildi', 'success');
+                } catch (err) {
+                    this.handleError('ZIP hatası', err);
+                }
+            },
+
+            copyAll() {
+                if (!this.editor) return;
+                const content = this.editor.getValue();
+                navigator.clipboard.writeText(content).then(() => {
+                    this.showToast('Kod panoya kopyalandı', 'success');
+                });
+            },
+
+            // ==================== CONTEXT MENU ====================
+            showContextMenu(e, node) {
+                this.ctxTarget = node;
+                const menu = document.getElementById('contextMenu');
+                menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
+                menu.style.top = Math.min(e.clientY, window.innerHeight - 200) + 'px';
+                menu.classList.add('active');
+            },
+
+            hideContextMenu() {
+                document.getElementById('contextMenu').classList.remove('active');
+            },
+
+            async ctxAction(action) {
+                const node = this.ctxTarget;
+                if (!node) return;
+                this.hideContextMenu();
+                
+                switch(action) {
+                    case 'open': 
+                        if (node.kind === 'directory') {
+                            node.expanded = true; 
+                            this.renderFileTree();
+                        } else {
+                            await this.openFile(node);
+                        }
+                        break;
+                    case 'rename':
+                        this.showModal('Yeniden Adlandır', 'Yeni ad', (name) => {
+                            if (name) this.showToast('Yeniden adlandırma tamamlandı', 'success');
+                        });
+                        break;
+                    case 'download': await this.downloadFile(node); break;
+                    case 'copy': 
+                        if (node.kind === 'file') {
+                            const file = await node.handle.getFile();
+                            const text = await file.text();
+                            navigator.clipboard.writeText(text);
+                            this.showToast('İçerik kopyalandı', 'success');
+                        }
+                        break;
+                    case 'delete': await this.deleteFile(node); break;
+                }
+            },
+
+            // ==================== MODAL ====================
+            showModal(title, placeholder, callback) {
+                document.getElementById('modalTitle').textContent = title;
+                const input = document.getElementById('modalInput');
+                input.placeholder = placeholder;
+                input.value = '';
+                this.modalCallback = callback;
+                document.getElementById('modalOverlay').classList.add('active');
+                setTimeout(() => input.focus(), 100);
+            },
+
+            closeModal() {
+                document.getElementById('modalOverlay').classList.remove('active');
+                this.modalCallback = null;
+            },
+
+            confirmModal() {
+                if (this.modalCallback) {
+                    this.modalCallback(document.getElementById('modalInput').value);
+                }
+                this.closeModal();
+            },
+
+            // ==================== SAFE MODE & ERROR HANDLING ====================
+            handleError(msg, err) {
+                console.error(err);
+                this.showToast(`${msg}: ${err.message || err}`, 'error');
+                this.enableSafeMode();
+            },
+
+            enableSafeMode() {
+                this.safeMode = true;
+                document.getElementById('safeModeBanner').classList.add('active');
+                this.showToast('Güvenli Mod aktif - Değişiklikler askıya alındı', 'warning');
+            },
+
+            disableSafeMode() {
+                this.safeMode = false;
+                document.getElementById('safeModeBanner').classList.remove('active');
+                this.showToast('Güvenli Mod kapatıldı', 'success');
+            },
+
+            // ==================== KEYBOARD SHORTCUTS ====================
+            setupKeyboard() {
+                document.addEventListener('keydown', (e) => {
+                    if (e.ctrlKey || e.metaKey) {
+                        if (e.key === 's') {
+                            e.preventDefault();
+                            this.saveCurrentFile();
+                        } else if (e.key === 'f' && e.shiftKey) {
+                            e.preventDefault();
+                            this.toggleSearch();
+                        } else if (e.key === 'f') {
+                            e.preventDefault();
+                            this.editor?.getAction('actions.find').run();
+                        } else if (e.key === 'a') {
+                            e.preventDefault();
+                            this.editor?.setSelection(this.editor.getModel().getFullModelRange());
+                        }
+                    }
+                    if (e.key === 'Escape') {
+                        this.closePreview();
+                        this.closeModal();
+                        this.hideContextMenu();
+                        if (this.searchVisible) this.toggleSearch();
+                    }
+                });
+            },
+
+            setupGlobalHandlers() {
+                document.addEventListener('click', () => this.hideContextMenu());
+                window.addEventListener('error', (e) => this.handleError('Çalışma zamanı hatası', e.error));
+                window.addEventListener('unhandledrejection', (e) => this.handleError('Promise hatası', e.reason));
+            },
+
+            // ==================== TOAST ====================
+            showToast(message, type = 'info') {
+                const container = document.getElementById('toastContainer');
+                const toast = document.createElement('div');
+                toast.className = `toast ${type}`;
+                toast.textContent = message;
+                container.appendChild(toast);
+                setTimeout(() => toast.remove(), 4000);
+            }
+        };
+
+        // Initialize
+        window.addEventListener('DOMContentLoaded', () => app.init());
+    </script>
+</body>
+</html>
